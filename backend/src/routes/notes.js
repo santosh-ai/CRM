@@ -5,11 +5,14 @@ const { authMiddleware } = require('../middleware/auth');
 
 const router = express.Router();
 
-// GET /api/notes?client_id=
+// ── GET /api/notes?client_id= ───────────────────────────────────────────────
 router.get('/', authMiddleware, async (req, res) => {
   try {
     const { client_id } = req.query;
     if (!client_id) return res.status(400).json({ error: 'client_id is required' });
+
+    const limit = Math.min(parseInt(req.query.limit) || 50, 100);
+    const offset = Math.max(parseInt(req.query.offset) || 0, 0);
 
     const result = await pool.query(
       `SELECT n.id, n.client_id, n.staff_id, n.note, n.note_date, n.created_at,
@@ -17,8 +20,9 @@ router.get('/', authMiddleware, async (req, res) => {
        FROM notes n
        LEFT JOIN users u ON u.id = n.staff_id
        WHERE n.client_id = $1
-       ORDER BY n.note_date DESC`,
-      [client_id]
+       ORDER BY n.note_date DESC
+       LIMIT $2 OFFSET $3`,
+      [client_id, limit, offset]
     );
     res.json(result.rows);
   } catch (err) {
@@ -27,11 +31,14 @@ router.get('/', authMiddleware, async (req, res) => {
   }
 });
 
-// POST /api/notes
+// ── POST /api/notes ─────────────────────────────────────────────────────────
 router.post(
   '/',
   authMiddleware,
-  [body('note').trim().notEmpty(), body('client_id').isInt()],
+  [
+    body('note').trim().notEmpty().isLength({ max: 10000 }),
+    body('client_id').isInt({ min: 1 }),
+  ],
   async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
@@ -65,8 +72,13 @@ router.post(
   }
 );
 
-// PUT /api/notes/:id
-router.put('/:id', authMiddleware, async (req, res) => {
+// ── PUT /api/notes/:id ──────────────────────────────────────────────────────
+router.put('/:id', authMiddleware, [
+  body('note').trim().notEmpty().isLength({ max: 10000 }),
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
   const { id } = req.params;
   const { note } = req.body;
   try {
@@ -82,13 +94,19 @@ router.put('/:id', authMiddleware, async (req, res) => {
       'UPDATE notes SET note = $1 WHERE id = $2 RETURNING *',
       [note, id]
     );
+
+    await pool.query(
+      'INSERT INTO audit_logs (user_id, action, entity_type, entity_id) VALUES ($1,$2,$3,$4)',
+      [req.user.id, 'UPDATE_NOTE', 'notes', id]
+    );
+
     res.json(result.rows[0]);
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
   }
 });
 
-// DELETE /api/notes/:id
+// ── DELETE /api/notes/:id ───────────────────────────────────────────────────
 router.delete('/:id', authMiddleware, async (req, res) => {
   try {
     const existing = await pool.query('SELECT * FROM notes WHERE id = $1', [req.params.id]);
@@ -99,6 +117,12 @@ router.delete('/:id', authMiddleware, async (req, res) => {
     }
 
     await pool.query('DELETE FROM notes WHERE id = $1', [req.params.id]);
+
+    await pool.query(
+      'INSERT INTO audit_logs (user_id, action, entity_type, entity_id) VALUES ($1,$2,$3,$4)',
+      [req.user.id, 'DELETE_NOTE', 'notes', req.params.id]
+    );
+
     res.json({ message: 'Note deleted' });
   } catch (err) {
     res.status(500).json({ error: 'Server error' });

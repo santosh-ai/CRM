@@ -5,10 +5,13 @@ const { authMiddleware, requireRole } = require('../middleware/auth');
 
 const router = express.Router();
 
-// GET /api/clients
+// ── GET /api/clients ────────────────────────────────────────────────────────
 router.get('/', authMiddleware, async (req, res) => {
   try {
     const { search, is_active } = req.query;
+    const limit = Math.min(parseInt(req.query.limit) || 50, 100);
+    const offset = Math.max(parseInt(req.query.offset) || 0, 0);
+
     let query = `
       SELECT id, name, ndis_number, dob, address, phone, email,
              emergency_contact_name, emergency_contact_phone, emergency_contact_relation,
@@ -29,7 +32,9 @@ router.get('/', authMiddleware, async (req, res) => {
       idx++;
     }
 
-    query += ' ORDER BY name';
+    query += ` ORDER BY name LIMIT $${idx} OFFSET $${idx + 1}`;
+    params.push(limit, offset);
+
     const result = await pool.query(query, params);
     res.json(result.rows);
   } catch (err) {
@@ -38,7 +43,7 @@ router.get('/', authMiddleware, async (req, res) => {
   }
 });
 
-// GET /api/clients/:id
+// ── GET /api/clients/:id ────────────────────────────────────────────────────
 router.get('/:id', authMiddleware, async (req, res) => {
   try {
     const result = await pool.query(
@@ -52,13 +57,23 @@ router.get('/:id', authMiddleware, async (req, res) => {
   }
 });
 
-// POST /api/clients
+// ── POST /api/clients ───────────────────────────────────────────────────────
 router.post(
   '/',
   authMiddleware,
   requireRole('admin', 'manager'),
   [
-    body('name').trim().notEmpty(),
+    body('name').trim().notEmpty().isLength({ max: 255 }),
+    body('ndis_number').optional({ nullable: true }).trim().isLength({ max: 100 }),
+    body('email').optional({ nullable: true }).isEmail().normalizeEmail(),
+    body('phone').optional({ nullable: true }).trim().isLength({ max: 50 }),
+    body('address').optional({ nullable: true }).trim().isLength({ max: 500 }),
+    body('care_plan').optional({ nullable: true }).trim().isLength({ max: 20000 }),
+    body('support_needs').optional({ nullable: true }).trim().isLength({ max: 10000 }),
+    body('risk_notes').optional({ nullable: true }).trim().isLength({ max: 10000 }),
+    body('emergency_contact_name').optional({ nullable: true }).trim().isLength({ max: 255 }),
+    body('emergency_contact_phone').optional({ nullable: true }).trim().isLength({ max: 50 }),
+    body('emergency_contact_relation').optional({ nullable: true }).trim().isLength({ max: 100 }),
   ],
   async (req, res) => {
     const errors = validationResult(req);
@@ -95,8 +110,20 @@ router.post(
   }
 );
 
-// PUT /api/clients/:id
-router.put('/:id', authMiddleware, requireRole('admin', 'manager'), async (req, res) => {
+// ── PUT /api/clients/:id ────────────────────────────────────────────────────
+router.put('/:id', authMiddleware, requireRole('admin', 'manager'), [
+  body('name').optional().trim().notEmpty().isLength({ max: 255 }),
+  body('ndis_number').optional({ nullable: true }).trim().isLength({ max: 100 }),
+  body('email').optional({ nullable: true }).isEmail().normalizeEmail(),
+  body('phone').optional({ nullable: true }).trim().isLength({ max: 50 }),
+  body('address').optional({ nullable: true }).trim().isLength({ max: 500 }),
+  body('care_plan').optional({ nullable: true }).trim().isLength({ max: 20000 }),
+  body('support_needs').optional({ nullable: true }).trim().isLength({ max: 10000 }),
+  body('risk_notes').optional({ nullable: true }).trim().isLength({ max: 10000 }),
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
   const { id } = req.params;
   const {
     name, ndis_number, dob, address, phone, email,
@@ -140,7 +167,7 @@ router.put('/:id', authMiddleware, requireRole('admin', 'manager'), async (req, 
   }
 });
 
-// DELETE /api/clients/:id (soft delete)
+// ── DELETE /api/clients/:id (soft delete) ──────────────────────────────────
 router.delete('/:id', authMiddleware, requireRole('admin'), async (req, res) => {
   try {
     const result = await pool.query(

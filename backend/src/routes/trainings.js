@@ -4,6 +4,7 @@ const fs = require('fs');
 const pool = require('../db');
 const { authMiddleware, requireRole } = require('../middleware/auth');
 const upload = require('../middleware/upload');
+const { validateMagicBytes } = require('../middleware/upload');
 
 const router = express.Router();
 
@@ -16,10 +17,12 @@ const STATUS_SQL = `
   END
 `;
 
-// GET /api/trainings
+// ── GET /api/trainings ──────────────────────────────────────────────────────
 router.get('/', authMiddleware, async (req, res) => {
   try {
     const { user_id, status } = req.query;
+    const limit = Math.min(parseInt(req.query.limit) || 100, 200);
+    const offset = Math.max(parseInt(req.query.offset) || 0, 0);
     const effectiveUserId = req.user.role === 'staff' ? req.user.id : user_id;
 
     let query = `
@@ -46,7 +49,9 @@ router.get('/', authMiddleware, async (req, res) => {
       idx++;
     }
 
-    query += ' ORDER BY t.expiry_date ASC NULLS LAST';
+    query += ` ORDER BY t.expiry_date ASC NULLS LAST LIMIT $${idx} OFFSET $${idx + 1}`;
+    params.push(limit, offset);
+
     const result = await pool.query(query, params);
     res.json(result.rows);
   } catch (err) {
@@ -55,7 +60,7 @@ router.get('/', authMiddleware, async (req, res) => {
   }
 });
 
-// GET /api/trainings/:id
+// ── GET /api/trainings/:id ──────────────────────────────────────────────────
 router.get('/:id', authMiddleware, async (req, res) => {
   try {
     const result = await pool.query(
@@ -74,7 +79,7 @@ router.get('/:id', authMiddleware, async (req, res) => {
   }
 });
 
-// POST /api/trainings
+// ── POST /api/trainings ─────────────────────────────────────────────────────
 router.post('/', authMiddleware, requireRole('admin', 'manager'), async (req, res) => {
   const { user_id, training_name, completion_date, expiry_date, notes } = req.body;
   try {
@@ -97,9 +102,14 @@ router.post('/', authMiddleware, requireRole('admin', 'manager'), async (req, re
   }
 });
 
-// POST /api/trainings/upload
+// ── POST /api/trainings/upload ──────────────────────────────────────────────
 router.post('/upload', authMiddleware, upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+
+  // Magic-byte validation
+  if (!validateMagicBytes(req.file.path, req.file.originalname)) {
+    return res.status(400).json({ error: 'File content does not match its declared type' });
+  }
 
   const { user_id, training_name, completion_date, expiry_date, notes } = req.body;
   const targetUserId = req.user.role === 'staff' ? req.user.id : (user_id || req.user.id);
@@ -125,7 +135,7 @@ router.post('/upload', authMiddleware, upload.single('file'), async (req, res) =
   }
 });
 
-// PUT /api/trainings/:id
+// ── PUT /api/trainings/:id ──────────────────────────────────────────────────
 router.put('/:id', authMiddleware, requireRole('admin', 'manager'), async (req, res) => {
   const { id } = req.params;
   const { training_name, completion_date, expiry_date, notes } = req.body;
@@ -142,6 +152,12 @@ router.put('/:id', authMiddleware, requireRole('admin', 'manager'), async (req, 
       [training_name, completion_date || null, expiry_date || null, notes, id]
     );
     if (!result.rows[0]) return res.status(404).json({ error: 'Training not found' });
+
+    await pool.query(
+      'INSERT INTO audit_logs (user_id, action, entity_type, entity_id) VALUES ($1,$2,$3,$4)',
+      [req.user.id, 'UPDATE_TRAINING', 'trainings', id]
+    );
+
     res.json(result.rows[0]);
   } catch (err) {
     console.error('Update training error:', err);
@@ -149,7 +165,7 @@ router.put('/:id', authMiddleware, requireRole('admin', 'manager'), async (req, 
   }
 });
 
-// DELETE /api/trainings/:id
+// ── DELETE /api/trainings/:id ───────────────────────────────────────────────
 router.delete('/:id', authMiddleware, requireRole('admin', 'manager'), async (req, res) => {
   try {
     const existing = await pool.query('SELECT * FROM trainings WHERE id = $1', [req.params.id]);

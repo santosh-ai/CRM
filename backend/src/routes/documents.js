@@ -4,6 +4,7 @@ const fs = require('fs');
 const pool = require('../db');
 const { authMiddleware, requireRole } = require('../middleware/auth');
 const upload = require('../middleware/upload');
+const { validateMagicBytes } = require('../middleware/upload');
 
 const router = express.Router();
 
@@ -16,10 +17,12 @@ const STATUS_SQL = `
   END
 `;
 
-// GET /api/documents
+// ── GET /api/documents ──────────────────────────────────────────────────────
 router.get('/', authMiddleware, async (req, res) => {
   try {
     const { user_id, status, document_type } = req.query;
+    const limit = Math.min(parseInt(req.query.limit) || 100, 200);
+    const offset = Math.max(parseInt(req.query.offset) || 0, 0);
 
     // Staff can only view their own documents
     const effectiveUserId = req.user.role === 'staff' ? req.user.id : user_id;
@@ -53,7 +56,9 @@ router.get('/', authMiddleware, async (req, res) => {
       idx++;
     }
 
-    query += ' ORDER BY d.expiry_date ASC NULLS LAST';
+    query += ` ORDER BY d.expiry_date ASC NULLS LAST LIMIT $${idx} OFFSET $${idx + 1}`;
+    params.push(limit, offset);
+
     const result = await pool.query(query, params);
     res.json(result.rows);
   } catch (err) {
@@ -62,7 +67,7 @@ router.get('/', authMiddleware, async (req, res) => {
   }
 });
 
-// GET /api/documents/:id
+// ── GET /api/documents/:id ──────────────────────────────────────────────────
 router.get('/:id', authMiddleware, async (req, res) => {
   try {
     const result = await pool.query(
@@ -82,7 +87,7 @@ router.get('/:id', authMiddleware, async (req, res) => {
   }
 });
 
-// POST /api/documents (create without file)
+// ── POST /api/documents (create record without file) ───────────────────────
 router.post('/', authMiddleware, requireRole('admin', 'manager'), async (req, res) => {
   const { user_id, document_type, issue_date, expiry_date, notes } = req.body;
   try {
@@ -105,9 +110,14 @@ router.post('/', authMiddleware, requireRole('admin', 'manager'), async (req, re
   }
 });
 
-// POST /api/documents/upload
+// ── POST /api/documents/upload ──────────────────────────────────────────────
 router.post('/upload', authMiddleware, upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+
+  // Magic-byte validation — delete the file and reject if it fails
+  if (!validateMagicBytes(req.file.path, req.file.originalname)) {
+    return res.status(400).json({ error: 'File content does not match its declared type' });
+  }
 
   const { user_id, document_type, issue_date, expiry_date, notes } = req.body;
   const targetUserId = req.user.role === 'staff' ? req.user.id : (user_id || req.user.id);
@@ -133,7 +143,7 @@ router.post('/upload', authMiddleware, upload.single('file'), async (req, res) =
   }
 });
 
-// PUT /api/documents/:id
+// ── PUT /api/documents/:id ──────────────────────────────────────────────────
 router.put('/:id', authMiddleware, async (req, res) => {
   const { id } = req.params;
   const { document_type, issue_date, expiry_date, notes } = req.body;
@@ -145,16 +155,37 @@ router.put('/:id', authMiddleware, async (req, res) => {
       return res.status(403).json({ error: 'Access denied' });
     }
 
-    const result = await pool.query(
-      `UPDATE documents SET
-        document_type = COALESCE($1, document_type),
-        issue_date = COALESCE($2, issue_date),
-        expiry_date = COALESCE($3, expiry_date),
-        notes = COALESCE($4, notes),
-        updated_at = NOW()
-       WHERE id = $5
-       RETURNING *, ${STATUS_SQL} AS computed_status`,
-      [document_type, issue_date || null, expiry_date || null, notes, id]
+    let updateQuery;
+    let params;
+
+    if (req.user.role === 'staff') {
+      // Staff can only update notes — not dates or document type, to prevent
+      // self-modification of compliance expiry dates
+      updateQuery = `
+        UPDATE documents SET
+          notes = COALESCE($1, notes),
+          updated_at = NOW()
+        WHERE id = $2
+        RETURNING *, ${STATUS_SQL} AS computed_status`;
+      params = [notes, id];
+    } else {
+      updateQuery = `
+        UPDATE documents SET
+          document_type = COALESCE($1, document_type),
+          issue_date = COALESCE($2, issue_date),
+          expiry_date = COALESCE($3, expiry_date),
+          notes = COALESCE($4, notes),
+          updated_at = NOW()
+        WHERE id = $5
+        RETURNING *, ${STATUS_SQL} AS computed_status`;
+      params = [document_type, issue_date || null, expiry_date || null, notes, id];
+    }
+
+    const result = await pool.query(updateQuery, params);
+
+    await pool.query(
+      'INSERT INTO audit_logs (user_id, action, entity_type, entity_id) VALUES ($1,$2,$3,$4)',
+      [req.user.id, 'UPDATE_DOCUMENT', 'documents', id]
     );
 
     res.json(result.rows[0]);
@@ -164,7 +195,7 @@ router.put('/:id', authMiddleware, async (req, res) => {
   }
 });
 
-// DELETE /api/documents/:id
+// ── DELETE /api/documents/:id ───────────────────────────────────────────────
 router.delete('/:id', authMiddleware, requireRole('admin', 'manager'), async (req, res) => {
   try {
     const existing = await pool.query('SELECT * FROM documents WHERE id = $1', [req.params.id]);

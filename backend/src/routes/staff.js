@@ -6,10 +6,13 @@ const { authMiddleware, requireRole } = require('../middleware/auth');
 
 const router = express.Router();
 
-// GET /api/staff
+// ── GET /api/staff ──────────────────────────────────────────────────────────
 router.get('/', authMiddleware, async (req, res) => {
   try {
     const { search, role, is_active } = req.query;
+    const limit = Math.min(parseInt(req.query.limit) || 50, 100);
+    const offset = Math.max(parseInt(req.query.offset) || 0, 0);
+
     let query = `
       SELECT u.id, u.name, u.email, u.role, u.position, u.employment_type,
              u.phone, u.address, u.availability, u.is_active, u.created_at,
@@ -38,14 +41,15 @@ router.get('/', authMiddleware, async (req, res) => {
       idx++;
     }
 
-    // Staff users see only themselves
+    // Staff users can only see themselves
     if (req.user.role === 'staff') {
       query += ` AND u.id = $${idx}`;
       params.push(req.user.id);
       idx++;
     }
 
-    query += ' GROUP BY u.id ORDER BY u.name';
+    query += ` GROUP BY u.id ORDER BY u.name LIMIT $${idx} OFFSET $${idx + 1}`;
+    params.push(limit, offset);
 
     const result = await pool.query(query, params);
     res.json(result.rows);
@@ -55,7 +59,7 @@ router.get('/', authMiddleware, async (req, res) => {
   }
 });
 
-// GET /api/staff/:id
+// ── GET /api/staff/:id ──────────────────────────────────────────────────────
 router.get('/:id', authMiddleware, async (req, res) => {
   try {
     const { id } = req.params;
@@ -77,15 +81,18 @@ router.get('/:id', authMiddleware, async (req, res) => {
   }
 });
 
-// POST /api/staff
+// ── POST /api/staff ─────────────────────────────────────────────────────────
 router.post(
   '/',
   authMiddleware,
   requireRole('admin'),
   [
-    body('name').trim().notEmpty(),
+    body('name').trim().notEmpty().isLength({ max: 255 }),
     body('email').isEmail().normalizeEmail(),
-    body('password').isLength({ min: 6 }),
+    body('password')
+      .isLength({ min: 12 })
+      .matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9])/)
+      .withMessage('Password must be at least 12 characters with uppercase, lowercase, number, and special character'),
     body('role').isIn(['admin', 'manager', 'staff']),
   ],
   async (req, res) => {
@@ -97,7 +104,7 @@ router.post(
       const existing = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
       if (existing.rows.length > 0) return res.status(409).json({ error: 'Email already registered' });
 
-      const password_hash = await bcrypt.hash(password, 10);
+      const password_hash = await bcrypt.hash(password, 12);
       const result = await pool.query(
         `INSERT INTO users (name, email, password_hash, role, position, employment_type, phone, address, availability)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
@@ -118,7 +125,7 @@ router.post(
   }
 );
 
-// PUT /api/staff/:id
+// ── PUT /api/staff/:id ──────────────────────────────────────────────────────
 router.put('/:id', authMiddleware, async (req, res) => {
   const { id } = req.params;
 
@@ -127,10 +134,10 @@ router.put('/:id', authMiddleware, async (req, res) => {
     return res.status(403).json({ error: 'Access denied' });
   }
 
-  const { name, email, role, position, employment_type, phone, address, availability, is_active, password } = req.body;
+  const { name, email, role, position, employment_type, phone, address, availability, is_active, password, currentPassword } = req.body;
   try {
-    // Only admins can change roles or deactivate
-    const updateRole = req.user.role === 'admin' ? role : undefined;
+    // Only admins can change roles or activation status
+    const updateRole   = req.user.role === 'admin' ? role   : undefined;
     const updateActive = req.user.role === 'admin' ? is_active : undefined;
 
     let updateQuery = `
@@ -158,7 +165,26 @@ router.put('/:id', authMiddleware, async (req, res) => {
       idx++;
     }
     if (password) {
-      const hash = await bcrypt.hash(password, 10);
+      // Non-admins must verify their current password before changing it
+      if (req.user.role !== 'admin') {
+        if (!currentPassword) {
+          return res.status(400).json({ error: 'Current password is required to set a new password' });
+        }
+        const userRow = await pool.query('SELECT password_hash FROM users WHERE id = $1', [id]);
+        if (!userRow.rows[0]) return res.status(404).json({ error: 'Staff member not found' });
+        const valid = await bcrypt.compare(currentPassword, userRow.rows[0].password_hash);
+        if (!valid) {
+          return res.status(403).json({ error: 'Current password is incorrect' });
+        }
+      }
+
+      if (password.length < 12 || !/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9])/.test(password)) {
+        return res.status(400).json({
+          error: 'Password must be at least 12 characters with uppercase, lowercase, number, and special character',
+        });
+      }
+
+      const hash = await bcrypt.hash(password, 12);
       updateQuery += `, password_hash = $${idx}`;
       params.push(hash);
       idx++;
@@ -182,7 +208,7 @@ router.put('/:id', authMiddleware, async (req, res) => {
   }
 });
 
-// DELETE /api/staff/:id (admin only - soft delete)
+// ── DELETE /api/staff/:id (admin only – soft delete) ───────────────────────
 router.delete('/:id', authMiddleware, requireRole('admin'), async (req, res) => {
   const { id } = req.params;
   if (parseInt(id) === req.user.id) {

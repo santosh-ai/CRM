@@ -1,11 +1,11 @@
 const express = require('express');
 const pool = require('../db');
-const { authMiddleware } = require('../middleware/auth');
+const { authMiddleware, requireRole } = require('../middleware/auth');
 
 const router = express.Router();
 
-// GET /api/dashboard
-router.get('/', authMiddleware, async (req, res) => {
+// ── GET /api/dashboard (admin/manager: full org view) ─────────────────────
+router.get('/', authMiddleware, requireRole('admin', 'manager'), async (req, res) => {
   try {
     const [
       staffCount,
@@ -93,6 +93,48 @@ router.get('/', authMiddleware, async (req, res) => {
     });
   } catch (err) {
     console.error('Dashboard error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ── GET /api/dashboard/me (staff: personal compliance summary) ────────────
+router.get('/me', authMiddleware, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const [myDocs, myTrainings, myIncidents] = await Promise.all([
+      pool.query(`
+        SELECT id, document_type, expiry_date,
+          CASE
+            WHEN expiry_date IS NULL THEN 'valid'
+            WHEN expiry_date < CURRENT_DATE THEN 'expired'
+            WHEN expiry_date <= CURRENT_DATE + INTERVAL '30 days' THEN 'expiring_soon'
+            ELSE 'valid'
+          END AS status
+        FROM documents WHERE user_id = $1 ORDER BY expiry_date ASC NULLS LAST
+      `, [userId]),
+      pool.query(`
+        SELECT id, training_name, expiry_date,
+          CASE
+            WHEN expiry_date IS NULL THEN 'valid'
+            WHEN expiry_date < CURRENT_DATE THEN 'expired'
+            WHEN expiry_date <= CURRENT_DATE + INTERVAL '30 days' THEN 'expiring_soon'
+            ELSE 'valid'
+          END AS status
+        FROM trainings WHERE user_id = $1 ORDER BY expiry_date ASC NULLS LAST
+      `, [userId]),
+      pool.query(`
+        SELECT id, title, incident_date, status, severity
+        FROM incidents WHERE reported_by = $1 ORDER BY incident_date DESC LIMIT 5
+      `, [userId]),
+    ]);
+
+    res.json({
+      documents: myDocs.rows,
+      trainings: myTrainings.rows,
+      my_incidents: myIncidents.rows,
+    });
+  } catch (err) {
+    console.error('Personal dashboard error:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });

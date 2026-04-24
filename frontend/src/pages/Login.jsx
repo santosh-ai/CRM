@@ -100,15 +100,6 @@ export default function Login() {
               ) : 'Sign In'}
             </button>
           </form>
-
-          <div className="mt-6 p-4 bg-gray-50 rounded-lg">
-            <p className="text-xs text-gray-500 font-medium mb-2">Demo credentials:</p>
-            <div className="space-y-1 text-xs text-gray-600">
-              <p><span className="font-medium">Admin:</span> admin@ndis.com / Admin@123</p>
-              <p><span className="font-medium">Manager:</span> manager@ndis.com / Admin@123</p>
-              <p><span className="font-medium">Staff:</span> michael.chen@ndis.com / Admin@123</p>
-            </div>
-          </div>
         </div>
 
         <p className="text-center text-blue-200 text-xs mt-6">
