@@ -4,6 +4,7 @@ import {
   LayoutDashboard, Users, UserCheck, FileText, BookOpen,
   AlertTriangle, LogOut, Menu, X, ChevronRight, Shield
 } from 'lucide-react'
+import api from '../api'
 
 function getUser() {
   try {
@@ -33,10 +34,17 @@ export default function Layout() {
   const navigate = useNavigate()
   const user = getUser()
 
-  const handleLogout = () => {
-    localStorage.removeItem('token')
-    localStorage.removeItem('user')
-    navigate('/login')
+  const handleLogout = async () => {
+    try {
+      // Revoke the token server-side so it cannot be replayed after logout
+      await api.post('/auth/logout')
+    } catch {
+      // If the server call fails (e.g. network error) we still clear locally
+    } finally {
+      localStorage.removeItem('token')
+      localStorage.removeItem('user')
+      navigate('/login')
+    }
   }
 
   const filteredNav = navItems.filter(item => item.roles.includes(user.role))

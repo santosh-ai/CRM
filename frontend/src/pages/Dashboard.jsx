@@ -1,8 +1,12 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Users, UserCheck, AlertTriangle, ShieldCheck, XCircle, Clock, ChevronRight } from 'lucide-react'
+import { Users, UserCheck, AlertTriangle, ShieldCheck, XCircle, Clock, ChevronRight, FileText, BookOpen } from 'lucide-react'
 import { format, differenceInDays } from 'date-fns'
 import api from '../api'
+
+function getUser() {
+  try { return JSON.parse(localStorage.getItem('user') || '{}') } catch { return {} }
+}
 
 function StatCard({ icon: Icon, label, value, color, sub }) {
   return (
@@ -38,38 +42,81 @@ function statusBadge(status) {
   return map[status] || 'bg-gray-100 text-gray-700'
 }
 
-export default function Dashboard() {
-  const [data, setData] = useState(null)
-  const [loading, setLoading] = useState(true)
+// ── Staff personal compliance dashboard ─────────────────────────────────────
+function StaffDashboard({ data }) {
+  const { documents = [], trainings = [], my_incidents = [] } = data
+  const expiredDocs      = documents.filter(d => d.status === 'expired')
+  const expiringSoonDocs = documents.filter(d => d.status === 'expiring_soon')
+  const validDocs        = documents.filter(d => d.status === 'valid')
 
-  useEffect(() => {
-    api.get('/dashboard')
-      .then(res => setData(res.data))
-      .catch(console.error)
-      .finally(() => setLoading(false))
-  }, [])
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600" />
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl font-bold text-gray-900">My Compliance</h1>
+        <p className="text-sm text-gray-500 mt-1">Your documents, training and incidents</p>
       </div>
-    )
-  }
 
-  const { stats = {}, expired_docs = [], expiring_docs = [], expiring_trainings = [], recent_incidents = [] } = data || {}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <StatCard icon={FileText}   label="Valid Documents"    value={validDocs.length}        color="bg-green-600" />
+        <StatCard icon={AlertTriangle} label="Expiring / Expired" value={expiringSoonDocs.length + expiredDocs.length} color={expiredDocs.length > 0 ? 'bg-red-500' : 'bg-yellow-500'} />
+        <StatCard icon={BookOpen}   label="Training Records"  value={trainings.length}         color="bg-blue-600" />
+      </div>
+
+      {(expiredDocs.length > 0 || expiringSoonDocs.length > 0) && (
+        <div className="card overflow-hidden">
+          <div className="px-4 py-3 bg-red-50 border-b border-red-100 flex items-center gap-2">
+            <XCircle className="w-4 h-4 text-red-600" />
+            <span className="text-sm font-medium text-red-800">Documents requiring attention</span>
+          </div>
+          <div className="divide-y divide-gray-100">
+            {[...expiredDocs, ...expiringSoonDocs].map(doc => (
+              <div key={doc.id} className="px-4 py-3 flex items-center justify-between">
+                <p className="text-sm font-medium text-gray-900">{doc.document_type}</p>
+                <span className={`text-xs px-2 py-0.5 rounded-full font-medium capitalize ${doc.status === 'expired' ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700'}`}>
+                  {doc.status === 'expiring_soon' ? 'Expiring Soon' : 'Expired'}
+                  {doc.expiry_date && ` · ${format(new Date(doc.expiry_date), 'dd MMM yyyy')}`}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {my_incidents.length > 0 && (
+        <div className="card overflow-hidden">
+          <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
+            <h2 className="font-semibold text-gray-900">My Recent Incidents</h2>
+            <Link to="/incidents" className="text-sm text-blue-600 hover:underline flex items-center gap-1">View all <ChevronRight className="w-4 h-4" /></Link>
+          </div>
+          <div className="divide-y divide-gray-100">
+            {my_incidents.map(inc => (
+              <div key={inc.id} className="px-6 py-3 flex items-center justify-between">
+                <p className="text-sm font-medium text-gray-900">{inc.title || 'Untitled'}</p>
+                <span className={`text-xs px-2 py-0.5 rounded-full font-medium capitalize ${statusBadge(inc.status)}`}>{inc.status?.replace('_', ' ')}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Admin / Manager full dashboard ───────────────────────────────────────────
+function AdminDashboard({ data }) {
+  const { stats = {}, expired_docs = [], expiring_docs = [], expiring_trainings = [], recent_incidents = [] } = data
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
-        <p className="text-sm text-gray-500 mt-1">NDIS compliance & service overview</p>
+        <p className="text-sm text-gray-500 mt-1">NDIS compliance &amp; service overview</p>
       </div>
 
       {/* Stat cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-        <StatCard icon={Users} label="Active Staff" value={stats.total_staff} color="bg-blue-600" />
-        <StatCard icon={UserCheck} label="Active Clients" value={stats.total_clients} color="bg-emerald-600" />
+        <StatCard icon={Users}       label="Active Staff"      value={stats.total_staff}       color="bg-blue-600" />
+        <StatCard icon={UserCheck}   label="Active Clients"    value={stats.total_clients}     color="bg-emerald-600" />
         <StatCard icon={AlertTriangle} label="Active Incidents" value={stats.active_incidents} color="bg-orange-500" />
         <StatCard
           icon={ShieldCheck}
@@ -107,12 +154,7 @@ export default function Dashboard() {
                       <p className="text-xs text-red-600 font-medium">
                         Expired {format(new Date(doc.expiry_date), 'dd MMM yyyy')}
                       </p>
-                      <Link
-                        to={`/staff/${doc.user_id}`}
-                        className="text-xs text-blue-600 hover:underline"
-                      >
-                        View staff →
-                      </Link>
+                      <Link to={`/staff/${doc.user_id}`} className="text-xs text-blue-600 hover:underline">View staff →</Link>
                     </div>
                   </div>
                 ))}
@@ -140,12 +182,7 @@ export default function Dashboard() {
                         Expires {format(new Date(doc.expiry_date), 'dd MMM yyyy')}
                         {' '}({differenceInDays(new Date(doc.expiry_date), new Date())} days)
                       </p>
-                      <Link
-                        to={`/staff/${doc.user_id}`}
-                        className="text-xs text-blue-600 hover:underline"
-                      >
-                        View staff →
-                      </Link>
+                      <Link to={`/staff/${doc.user_id}`} className="text-xs text-blue-600 hover:underline">View staff →</Link>
                     </div>
                   </div>
                 ))}
@@ -172,12 +209,7 @@ export default function Dashboard() {
                       <p className="text-xs text-yellow-700 font-medium">
                         Expires {format(new Date(t.expiry_date), 'dd MMM yyyy')}
                       </p>
-                      <Link
-                        to={`/staff/${t.user_id}`}
-                        className="text-xs text-blue-600 hover:underline"
-                      >
-                        View staff →
-                      </Link>
+                      <Link to={`/staff/${t.user_id}`} className="text-xs text-blue-600 hover:underline">View staff →</Link>
                     </div>
                   </div>
                 ))}
@@ -198,45 +230,63 @@ export default function Dashboard() {
         {recent_incidents.length === 0 ? (
           <div className="px-6 py-10 text-center text-gray-400">
             <AlertTriangle className="w-8 h-8 mx-auto mb-2 opacity-30" />
-            <p className="text-sm">No incidents recorded</p>
+            <p className="text-sm">No incidents reported</p>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-xs font-medium text-gray-500 uppercase tracking-wider bg-gray-50">
-                  <th className="px-6 py-3">Incident</th>
-                  <th className="px-6 py-3">Client</th>
-                  <th className="px-6 py-3">Date</th>
-                  <th className="px-6 py-3">Severity</th>
-                  <th className="px-6 py-3">Status</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {recent_incidents.map(inc => (
-                  <tr key={inc.id} className="hover:bg-gray-50 transition-colors">
-                    <td className="px-6 py-3 font-medium text-gray-900">{inc.title || 'Untitled'}</td>
-                    <td className="px-6 py-3 text-gray-600">{inc.client_name}</td>
-                    <td className="px-6 py-3 text-gray-500">
-                      {format(new Date(inc.incident_date), 'dd MMM yyyy')}
-                    </td>
-                    <td className="px-6 py-3">
-                      <span className={`px-2 py-0.5 rounded-full text-xs font-medium capitalize ${severityBadge(inc.severity)}`}>
-                        {inc.severity}
-                      </span>
-                    </td>
-                    <td className="px-6 py-3">
-                      <span className={`px-2 py-0.5 rounded-full text-xs font-medium capitalize ${statusBadge(inc.status)}`}>
-                        {inc.status?.replace('_', ' ')}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="divide-y divide-gray-100">
+            {recent_incidents.map(inc => (
+              <div key={inc.id} className="px-6 py-3 flex items-center justify-between gap-4">
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium text-gray-900 truncate">{inc.title || 'Untitled'}</p>
+                  <p className="text-xs text-gray-500">{inc.client_name} · {inc.reported_by_name}</p>
+                </div>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <span className={`text-xs px-2 py-0.5 rounded-full font-medium capitalize ${severityBadge(inc.severity)}`}>
+                    {inc.severity}
+                  </span>
+                  <span className={`text-xs px-2 py-0.5 rounded-full font-medium capitalize ${statusBadge(inc.status)}`}>
+                    {inc.status?.replace('_', ' ')}
+                  </span>
+                </div>
+              </div>
+            ))}
           </div>
         )}
       </div>
     </div>
   )
+}
+
+// ── Main Dashboard component ─────────────────────────────────────────────────
+export default function Dashboard() {
+  const [data, setData] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const currentUser = getUser()
+  const isStaff = currentUser.role === 'staff'
+
+  useEffect(() => {
+    const endpoint = isStaff ? '/dashboard/me' : '/dashboard'
+    api.get(endpoint)
+      .then(res => setData(res.data))
+      .catch(console.error)
+      .finally(() => setLoading(false))
+  }, [isStaff])
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600" />
+      </div>
+    )
+  }
+
+  if (!data) {
+    return (
+      <div className="text-center py-20 text-gray-400">
+        <p>Failed to load dashboard data</p>
+      </div>
+    )
+  }
+
+  return isStaff ? <StaffDashboard data={data} /> : <AdminDashboard data={data} />
 }
