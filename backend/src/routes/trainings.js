@@ -1,10 +1,9 @@
 const express = require('express');
 const path = require('path');
-const fs = require('fs');
 const pool = require('../db');
 const { authMiddleware, requireRole } = require('../middleware/auth');
 const upload = require('../middleware/upload');
-const { validateMagicBytes } = require('../middleware/upload');
+const { validateMagicBytes, safeDeleteFile } = require('../middleware/upload');
 
 const router = express.Router();
 
@@ -173,9 +172,7 @@ router.delete('/:id', authMiddleware, requireRole('admin', 'manager'), async (re
 
     if (existing.rows[0].certificate_url) {
       const filePath = path.join(process.env.UPLOAD_DIR || './uploads', path.basename(existing.rows[0].certificate_url));
-      if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath);
-      }
+      safeDeleteFile(filePath);
     }
 
     await pool.query('DELETE FROM trainings WHERE id = $1', [req.params.id]);

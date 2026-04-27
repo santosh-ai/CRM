@@ -256,8 +256,8 @@ export default function Staff() {
                         value={form.password}
                         onChange={e => setForm(f => ({ ...f, password: e.target.value }))}
                         required={!editing}
-                        minLength={6}
-                        placeholder={editing ? '••••••••' : 'Min 6 characters'}
+                        minLength={12}
+                        placeholder={editing ? '••••••••' : 'Min 12 characters'}
                       />
                     </div>
 

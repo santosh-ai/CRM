@@ -3,7 +3,7 @@ const { body, validationResult } = require('express-validator');
 const pool = require('../db');
 const { authMiddleware, requireRole } = require('../middleware/auth');
 const upload = require('../middleware/upload');
-const { validateMagicBytes } = require('../middleware/upload');
+const { validateMagicBytes, safeDeleteFile } = require('../middleware/upload');
 
 const router = express.Router();
 
@@ -145,7 +145,7 @@ router.post(
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
       if (req.file) {
-        try { require('fs').unlinkSync(req.file.path); } catch {}
+        safeDeleteFile(req.file.path);
       }
       return res.status(400).json({ errors: errors.array() });
     }

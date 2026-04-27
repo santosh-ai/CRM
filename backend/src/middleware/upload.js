@@ -2,7 +2,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 
-const uploadDir = process.env.UPLOAD_DIR || './uploads';
+const uploadDir = path.resolve(process.env.UPLOAD_DIR || './uploads');
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
@@ -13,7 +13,9 @@ const storage = multer.diskStorage({
   },
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-    const ext = path.extname(file.originalname).toLowerCase();
+    // Use only the basename then extract the extension to prevent any path
+    // traversal via a crafted originalname (e.g. "../../../../etc/passwd.pdf")
+    const ext = path.extname(path.basename(file.originalname)).toLowerCase();
     cb(null, `${file.fieldname}-${uniqueSuffix}${ext}`);
   },
 });
@@ -32,7 +34,8 @@ const ALLOWED = {
 };
 
 const fileFilter = (req, file, cb) => {
-  const ext = path.extname(file.originalname).toLowerCase();
+  // Use only the basename's extension to prevent path-traversal via originalname
+  const ext = path.extname(path.basename(file.originalname)).toLowerCase();
   const allowedMimes = ALLOWED[ext];
   if (!allowedMimes) {
     return cb(new Error('Invalid file type. Allowed: PDF, JPG, PNG, DOC, DOCX'), false);
@@ -60,26 +63,47 @@ const SIGNATURES = {
   '.png':  Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]), // ‰PNG\r\n\x1a\n
 };
 
+const safeDeleteFile = (filePath) => {
+  try {
+    // Resolve to an absolute path and confirm it stays within the upload directory
+    // before deleting — this prevents path-traversal attacks.
+    const resolved = path.resolve(filePath);
+    if (resolved.startsWith(uploadDir + path.sep) || resolved.startsWith(uploadDir)) {
+      fs.unlinkSync(resolved);
+    }
+  } catch {
+    // Ignore deletion errors — the file is either already gone or inaccessible
+  }
+};
+
 const validateMagicBytes = (filePath, originalname) => {
-  const ext = path.extname(originalname).toLowerCase();
+  // Resolve to an absolute path and confirm it's inside the upload directory
+  // before touching it — guards against any user-influenced path traversal.
+  const resolvedPath = path.resolve(filePath);
+  if (!resolvedPath.startsWith(uploadDir + path.sep) && resolvedPath !== uploadDir) {
+    return false;
+  }
+
+  const ext = path.extname(path.basename(originalname)).toLowerCase();
   const expected = SIGNATURES[ext];
   if (!expected) return true; // .doc / .docx are ZIP/OLE — skip magic check
 
   try {
-    const fd = fs.openSync(filePath, 'r');
+    const fd = fs.openSync(resolvedPath, 'r');
     const buf = Buffer.alloc(expected.length);
     fs.readSync(fd, buf, 0, expected.length, 0);
     fs.closeSync(fd);
     if (!buf.equals(expected)) {
-      fs.unlinkSync(filePath);
+      safeDeleteFile(resolvedPath);
       return false;
     }
     return true;
   } catch {
-    try { fs.unlinkSync(filePath); } catch {}
+    safeDeleteFile(resolvedPath);
     return false;
   }
 };
 
 module.exports = upload;
 module.exports.validateMagicBytes = validateMagicBytes;
+module.exports.safeDeleteFile = safeDeleteFile;
