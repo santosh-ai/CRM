@@ -106,7 +106,7 @@ router.post('/upload', authMiddleware, upload.single('file'), async (req, res) =
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
   // Magic-byte validation
-  if (!validateMagicBytes(req.file.path, req.file.originalname)) {
+  if (!validateMagicBytes(req.file.filename, req.file.originalname)) {
     return res.status(400).json({ error: 'File content does not match its declared type' });
   }
 
@@ -171,8 +171,7 @@ router.delete('/:id', authMiddleware, requireRole('admin', 'manager'), async (re
     if (!existing.rows[0]) return res.status(404).json({ error: 'Training not found' });
 
     if (existing.rows[0].certificate_url) {
-      const filePath = path.join(process.env.UPLOAD_DIR || './uploads', path.basename(existing.rows[0].certificate_url));
-      safeDeleteFile(filePath);
+      safeDeleteFile(path.basename(existing.rows[0].certificate_url));
     }
 
     await pool.query('DELETE FROM trainings WHERE id = $1', [req.params.id]);

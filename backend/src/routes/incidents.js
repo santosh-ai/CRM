@@ -145,7 +145,7 @@ router.post(
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
       if (req.file) {
-        safeDeleteFile(req.file.path);
+        safeDeleteFile(req.file.filename);
       }
       return res.status(400).json({ errors: errors.array() });
     }
@@ -153,7 +153,7 @@ router.post(
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
     // Magic-byte validation
-    if (!validateMagicBytes(req.file.path, req.file.originalname)) {
+    if (!validateMagicBytes(req.file.filename, req.file.originalname)) {
       return res.status(400).json({ error: 'File content does not match its declared type' });
     }
 

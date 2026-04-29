@@ -114,7 +114,7 @@ router.post('/upload', authMiddleware, upload.single('file'), async (req, res) =
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
   // Magic-byte validation — delete the file and reject if it fails
-  if (!validateMagicBytes(req.file.path, req.file.originalname)) {
+  if (!validateMagicBytes(req.file.filename, req.file.originalname)) {
     return res.status(400).json({ error: 'File content does not match its declared type' });
   }
 
@@ -202,8 +202,7 @@ router.delete('/:id', authMiddleware, requireRole('admin', 'manager'), async (re
 
     // Delete file from disk if exists
     if (existing.rows[0].file_url) {
-      const filePath = path.join(process.env.UPLOAD_DIR || './uploads', path.basename(existing.rows[0].file_url));
-      safeDeleteFile(filePath);
+      safeDeleteFile(path.basename(existing.rows[0].file_url));
     }
 
     await pool.query('DELETE FROM documents WHERE id = $1', [req.params.id]);
